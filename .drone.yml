@@ -1,0 +1,86 @@
+kind: pipeline
+name: default
+type: docker
+
+clone:
+  disable: true
+
+steps:
+- name: skip_tls_clone
+  image: plugins/git
+  settings:
+    depth: 10
+    skip_verify: true
+
+- name: setup-virtualenv
+  image: python:3.7-alpine
+  commands:
+  - pip install virtualenv
+  - virtualenv /tmp/shared/.venv
+  - source /tmp/shared/.venv/bin/activate
+  - pip install -r app/requirements.txt
+  volumes:
+  - name: shared
+    path: /tmp/shared
+
+- name: test
+  image: python:3.7-alpine
+  commands:
+  - source /tmp/shared/.venv/bin/activate
+  - python app/tests.py
+  - echo $$DRONE_COMMIT_SHA > .tags
+  volumes:
+  - name: shared
+    path: /tmp/shared
+
+- name: build-and-publish
+  image: plugins/docker
+  settings:
+    storage_driver: vfs
+    dockerfile: docker/Dockerfile.amd64
+    username:
+      from_secret: docker_username
+    password:
+      from_secret: docker_password
+    repo: ruanbekker/civo-cicd-demo
+    purge: false
+  volumes:
+  - name: docker-cache
+    path: /var/lib/docker
+
+- name: deploy
+  image: alpine
+  commands:
+  - echo "this is a dummy deploy step"
+  - pwd
+  - ls -lah /tmp/
+  volumes:
+  - name: docker-cache
+    path: /tmp/
+
+- name: slack
+  image: plugins/slack
+  settings:
+    webhook:
+      from_secret: slack_webhook
+    channel: system_events
+    username: Drone
+    #image_url: https://a.slack-edge.com/80588/img/services/api_200.png
+    icon_url: https://pandorafms.com/blog/wp-content/uploads/2015/02/Slack-icon.png
+    template: >
+      *BUILD ({{build.number}}) SUCCEEDED* :aww_yeah:
+
+      {{#success build.status}}
+        - Build Info: <{{build.link}}|Drone Build URL>
+        - Commit Hash: {{build.commit}}
+        - Docker Image: <https://hub.docker.com/r/ruanbekker/civo-cicd-demo/tags?page=1&name={{build.commit}}|ruanbekker/civo-cicd-demo>
+      {{else}}
+        build {{build.number}} failed. Fix me please.
+      {{/success}}
+
+volumes:
+- name: shared
+  temp: {}
+- name: docker-cache
+  host:
+    path: /var/cache/${DRONE_REPO_NAME}/docker
